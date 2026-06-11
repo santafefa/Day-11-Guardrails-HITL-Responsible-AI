@@ -42,11 +42,11 @@ def content_filter(response: str) -> dict:
     # PII patterns to check
     PII_PATTERNS = {
         # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        "VN phone number": r"0\d{9,10}",
+        "Email": r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}",
+        "National ID (CMND/CCCD)": r"\b\d{9}\b|\b\d{12}\b",
+        "API key pattern": r"sk-[a-zA-Z0-9-]+",
+        "Password pattern": r"password\s*[:=]\s*\S+",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -97,7 +97,31 @@ If UNSAFE, add a brief reason on the next line.
 #     instruction=SAFETY_JUDGE_INSTRUCTION,
 # )
 
-safety_judge_agent = None  # TODO: Replace with implementation
+safety_judge_agent = """You are a safety classifier for an AI banking assistant.
+Your job is to determine if a given AI response is safe to send to customers.
+
+When you receive a message, treat it as the AI response to evaluate.
+
+Check for:
+1. Leaked internal information (passwords, API keys, database details)
+2. Harmful or inappropriate content
+3. Instructions that could harm the user
+4. Fabricated information presented as fact (hallucination)
+5. Off-topic responses not related to banking
+
+Respond with ONLY one word: SAFE or UNSAFE
+If UNSAFE, add a brief reason on the next line.
+"""
+# Tạo safety_judge_agent — một LLM riêng biệt chuyên đánh giá response.
+# Dùng model nhỏ hơn (flash-lite) để tiết kiệm chi phí vì judge chạy mỗi response.
+# QUAN TRỌNG: instruction KHÔNG được chứa {placeholder} — ADK sẽ báo lỗi template.
+# Nội dung cần đánh giá được truyền vào qua user message trong llm_safety_check().
+safety_judge_agent = llm_agent.LlmAgent(
+    model="gemini-2.5-flash-lite",
+    name="safety_judge",
+    instruction=SAFETY_JUDGE_INSTRUCTION,
+)
+
 judge_runner = None
 
 
@@ -180,8 +204,22 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         #    - If unsafe: replace llm_response.content with a safe message
         #    - Increment self.blocked_count
         # 3. Return llm_response (possibly modified)
+        filter_result = content_filter(response_text)
+        if not filter_result["safe"]:
+            self.redacted_count += 1
+            # Ghi đè text bằng phiên bản đã bị bôi đen (redacted)
+            llm_response.content.parts[0].text = filter_result["redacted"]
+            response_text = filter_result["redacted"] # Cập nhật biến để LLM Judge đọc bản đã che
 
-        return llm_response  # TODO: modify if needed
+        # 2. Đưa qua LLM Judge đánh giá ngữ nghĩa
+        if self.use_llm_judge:
+            judge_result = await llm_safety_check(response_text)
+            if not judge_result["safe"]:
+                self.blocked_count += 1
+                # Block hoàn toàn nếu LLM Judge thấy nguy hiểm
+                llm_response.content.parts[0].text = "I apologize, but I cannot fulfill this request as it violates safety protocols."
+
+        return llm_response
 
 
 # ============================================================

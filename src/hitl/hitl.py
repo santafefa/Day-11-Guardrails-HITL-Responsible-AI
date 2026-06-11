@@ -84,13 +84,40 @@ class ConfidenceRouter:
         #      action="escalate", priority="high",
         #      requires_human=True, reason="Low confidence — escalating"
 
-        return RoutingDecision(
-            action="auto_send",
-            confidence=confidence,
-            reason="TODO: implement routing logic",
-            priority="low",
-            requires_human=False,
-        )  # TODO: Replace with implementation
+        if action_type in self.HIGH_RISK_ACTIONS:
+            action = "escalate"
+            hitl_model = "Human-as-tiebreaker"
+            reason = "High-risk action requires explicit human approval."
+
+        # 2. Điểm tự tin rất cao -> Gửi tự động, con người chỉ xem lại sau (on-the-loop)
+        elif confidence >= self.high_threshold:
+            action = "auto_send"
+            hitl_model = "Human-on-the-loop"
+            reason = "High confidence score. Safe to auto-send."
+
+        # 3. Điểm tự tin trung bình -> Đợi con người duyệt trước khi gửi (in-the-loop)
+        elif confidence >= self.low_threshold:
+            action = "queue_review"
+            hitl_model = "Human-in-the-loop"
+            reason = "Medium confidence. Requires human review before sending."
+
+        # 4. Điểm tự tin thấp -> Báo cáo lên cấp cao hơn xử lý
+        else:
+            action = "escalate"
+            hitl_model = "Human-as-tiebreaker"
+            reason = "Low confidence score. Escalate to human agent."
+
+        result = {
+            "action": action,
+            "hitl_model": hitl_model,
+            "reason": reason,
+            "confidence": confidence,
+            "action_type": action_type,
+        }
+
+        self.routing_log.append(result)
+        return result
+
 
 
 # ============================================================
@@ -109,29 +136,30 @@ class ConfidenceRouter:
 hitl_decision_points = [
     {
         "id": 1,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
+        "scenario": "Customer requests a high-value money transfer (e.g., over 100 million VND).",
+        "trigger": "action_type == 'transfer_money' and amount > 100000000",
+        "hitl_model": "Human-as-tiebreaker",
+        "context_for_human": "Customer account balance, recent transaction history, destination account details, and fraud detection score.",
+        "expected_response_time": "< 5 minutes (Real-time queue)",
     },
     {
         "id": 2,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
+        "scenario": "Agent generates a response explaining complex commercial loan terms but has medium confidence (0.8).",
+        "trigger": "action_type == 'loan' and confidence between 0.7 and 0.9",
+        "hitl_model": "Human-in-the-loop",
+        "context_for_human": "The AI's drafted response, customer's credit profile, and matched internal loan policy documents.",
+        "expected_response_time": "< 2 hours",
     },
     {
         "id": 3,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
+        "scenario": "Customer successfully updates their email address via OTP verification.",
+        "trigger": "action_type == 'update_personal_info' and otp_verified == True and confidence > 0.9",
+        "hitl_model": "Human-on-the-loop",
+        "context_for_human": "Old email, new email, OTP verification timestamp, and device IP address location.",
+        "expected_response_time": "Asynchronous review (Daily audit within 24 hours)",
     },
 ]
+
 
 
 # ============================================================
@@ -171,7 +199,7 @@ def test_hitl_points():
     print("\nHITL Decision Points:")
     print("=" * 60)
     for point in hitl_decision_points:
-        print(f"\n  Decision Point #{point['id']}: {point['name']}")
+        print(f"\n  Decision Point #{point['id']}: {point['scenario']}")
         print(f"    Trigger:  {point['trigger']}")
         print(f"    Model:    {point['hitl_model']}")
         print(f"    Context:  {point['context_needed']}")
